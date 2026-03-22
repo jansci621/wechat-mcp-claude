@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "wechat-bridge": {
+      "command": "bun",
+      "args": ["./wechat-mcp-server.ts"]
+    }
+  }
+}

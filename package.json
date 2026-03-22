@@ -1,0 +1,25 @@
+{
+  "name": "webchat-mcp",
+  "version": "0.2.0",
+  "description": "Claude Code Channel plugin for WeChat — bridge WeChat messages into Claude Code sessions via the official ilink API or ACP protocol",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "setup": "bun setup.ts",
+    "start": "bun wechat-channel.ts",
+    "acp": "bun acp-server.ts",
+    "acp:mcp": "bun acp-mcp-adapter.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "hono": "^4.6.0",
+    "qrcode-terminal": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  },
+  "license": "MIT"
+}
