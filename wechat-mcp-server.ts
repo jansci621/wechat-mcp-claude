@@ -374,8 +374,7 @@ async function autoProcessMessages(
   const log = (msg: string) => {
     const now = new Date();
     const time = now.toLocaleTimeString("zh-CN", { hour12: false }) + "." + String(now.getMilliseconds()).padStart(3, "0");
-    const label = accountName === "default" ? "" : `[${accountName}] `;
-    process.stderr.write(`[${time}] ${label}${msg}\n`);
+    process.stderr.write(`[${time}] [${accountName}] ${msg}\n`);
   };
 
   for (const msg of messages) {
@@ -468,8 +467,7 @@ async function startPollingForAccount(accountName: string, account: AccountData)
   const log = (msg: string) => {
     const now = new Date();
     const time = now.toLocaleTimeString("zh-CN", { hour12: false }) + "." + String(now.getMilliseconds()).padStart(3, "0");
-    const label = accountName === "default" ? "" : `[${accountName}] `;
-    process.stderr.write(`[${time}] ${label}${msg}\n`);
+    process.stderr.write(`[${time}] [${accountName}] ${msg}\n`);
   };
 
   // 尝试恢复同步状态（每个账号独立的同步文件）
@@ -497,8 +495,19 @@ async function startPollingForAccount(accountName: string, account: AccountData)
 
         if (isError) {
           consecutiveFailures++;
-          log(`getUpdates 失败: ret=${resp.ret} errcode=${resp.errcode}`);
+
+          // 友好的错误提示
+          let errorMsg = `getUpdates 失败: ret=${resp.ret} errcode=${resp.errcode}`;
+          if (resp.errcode === -14) {
+            errorMsg = `Token 无效或已过期，请运行 'bun setup.ts --add ${accountName}' 重新登录`;
+          } else if (resp.errcode === -1) {
+            errorMsg = `网络错误，正在重试...`;
+          }
+
+          log(`❌ ${errorMsg}`);
+
           if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+            log(`连续失败 ${MAX_CONSECUTIVE_FAILURES} 次，等待 ${BACKOFF_DELAY_MS / 1000}s 后重试`);
             await new Promise((r) => setTimeout(r, BACKOFF_DELAY_MS));
             consecutiveFailures = 0;
           } else {
