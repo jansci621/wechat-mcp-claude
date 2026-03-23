@@ -4,6 +4,114 @@
 
 **wechat-mcp-claude** 是一个微信消息桥接工具，通过 MCP (Model Context Protocol) 协议让 Claude Code 直接与微信交互。
 
+## 架构图
+
+### 整体架构
+
+```mermaid
+graph LR
+    subgraph 用户侧
+        WX[微信用户]
+    end
+
+    subgraph 微信服务器
+        API[iLink API]
+    end
+
+    subgraph 本地服务
+        SETUP[setup.ts<br/>扫码登录]
+        CREDS[(账号凭据<br/>~/.claude/...)]
+        MCP[wechat-mcp-server.ts<br/>MCP Server]
+        CLAUDE[Claude Code]
+    end
+
+    WX -->|扫码确认| API
+    API -->|返回token| SETUP
+    SETUP -->|保存凭据| CREDS
+    MCP -->|加载凭据| CREDS
+    MCP -->|长轮询| API
+    WX -->|发送消息| API
+    API -->|推送消息| MCP
+    MCP -->|自动处理| CLAUDE
+    CLAUDE -->|MCP工具调用| MCP
+    MCP -->|发送回复| API
+    API -->|推送回复| WX
+```
+
+### 登录流程
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant S as setup.ts
+    participant API as 微信iLink API
+    participant F as 本地文件
+
+    U->>S: 运行 bun setup.ts
+    S->>API: 请求登录二维码
+    API-->>S: 返回二维码URL
+    S->>U: 显示二维码(终端)
+    U->>API: 微信扫码确认
+    API-->>S: 返回 bot_token + ilink_bot_id
+    S->>F: 保存凭据到 ~/.claude/channels/wechat/accounts/
+    S-->>U: 登录成功提示
+```
+
+### 消息处理流程
+
+```mermaid
+sequenceDiagram
+    participant WX as 微信用户
+    participant API as 微信iLink API
+    participant MCP as MCP Server
+    participant CLAUDE as Claude Code
+
+    MCP->>API: 长轮询 getUpdates()
+    WX->>API: 发送消息
+    API-->>MCP: 返回消息 + context_token
+    MCP->>MCP: 缓存 context_token
+    MCP->>MCP: 加入待处理队列
+
+    alt 自动处理模式
+        MCP->>CLAUDE: 调用 claude -p 处理消息
+        CLAUDE-->>MCP: 返回回复内容
+        MCP->>API: sendMessage(回复)
+        API-->>WX: 推送回复
+    else 手动模式
+        CLAUDE->>MCP: wechat_poll() 获取消息
+        MCP-->>CLAUDE: 返回消息列表
+        CLAUDE->>MCP: wechat_send() 发送回复
+        MCP->>API: sendMessage(回复)
+        API-->>WX: 推送回复
+    end
+```
+
+### MCP 工具调用
+
+```mermaid
+graph TD
+    CLAUDE[Claude Code]
+
+    CLAUDE -->|wechat_poll| P[获取待处理消息]
+    CLAUDE -->|wechat_send| S[发送微信消息]
+    CLAUDE -->|wechat_status| ST[查询连接状态]
+    CLAUDE -->|wechat_auto_process| AP[开关自动处理]
+
+    P -->|返回| R1[消息列表: sender_id, text, timestamp]
+    S -->|需要| R2[context_token]
+    ST -->|返回| R3[账号列表, 待处理消息数]
+    AP -->|切换| R4[自动处理模式]
+```
+
+**核心流程说明：**
+
+| 阶段 | 说明 |
+|------|------|
+| 登录 | 通过 `setup.ts` 扫码获取 token，保存到本地 |
+| 轮询 | MCP Server 长轮询微信 API 获取新消息 |
+| 处理 | 自动模式：调用 Claude CLI 处理；手动模式：通过 MCP 工具调用 |
+| 回复 | 使用 `context_token` 发送回复消息 |
+
 ## 功能特性
 
 - **多账号支持**：可配置多个微信账号
