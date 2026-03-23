@@ -1,5 +1,5 @@
 {
-  "name": "webchat-mcp",
+  "name": "wechat-mcp-claude",
   "version": "0.2.0",
   "description": "Claude Code Channel plugin for WeChat — bridge WeChat messages into Claude Code sessions via the official ilink API or ACP protocol",
   "type": "module",

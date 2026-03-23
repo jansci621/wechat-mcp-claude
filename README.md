@@ -2,7 +2,7 @@
 
 ## 项目简介
 
-**webchat-mcp** 是一个微信消息桥接工具，通过 MCP (Model Context Protocol) 协议让 Claude Code 直接与微信交互。
+**wechat-mcp-claude** 是一个微信消息桥接工具，通过 MCP (Model Context Protocol) 协议让 Claude Code 直接与微信交互。
 
 ## 功能特性
 
@@ -112,7 +112,7 @@ WECHAT_ACCOUNT_FILE=~/.claude/channels/wechat/accounts/work.json bun wechat-mcp-
 ## 文件结构
 
 ```
-webchat-mcp/
+wechat-mcp-claude/
 ├── .mcp.json              # MCP 配置文件
 ├── package.json           # 项目依赖
 ├── setup.ts               # 账号管理/扫码登录工具
