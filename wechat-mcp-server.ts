@@ -353,9 +353,9 @@ interface ConversationMessage {
   isSummary?: boolean; // 标记是否为压缩摘要
 }
 
-const MAX_HISTORY_LENGTH = 20; // 最多保留 20 条历史
+const MAX_HISTORY_LENGTH = 10; // 最多保留 10 条历史
 const MAX_MESSAGE_LENGTH = 2000; // 单条消息最大长度
-const MAX_CONTEXT_TOKENS = 50000; // 上下文 token 阈值
+const MAX_CONTEXT_TOKENS = 20000; // 上下文 token 阈值
 const TOKEN_RATIO = 2; // 字符/token 估算比例（中文约 2 字符/token）
 
 // 按 accountName:senderId 存储会话历史
