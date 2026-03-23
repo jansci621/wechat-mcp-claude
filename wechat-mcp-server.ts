@@ -344,6 +344,176 @@ function getCachedContextToken(userId: string): string | undefined {
   return contextTokenCache.get(userId);
 }
 
+// ── 会话上下文管理 ──────────────────────────────────────────────────────────
+
+interface ConversationMessage {
+  role: "user" | "assistant";
+  content: string;
+  timestamp: number;
+  isSummary?: boolean; // 标记是否为压缩摘要
+}
+
+const MAX_HISTORY_LENGTH = 20; // 最多保留 20 条历史
+const MAX_MESSAGE_LENGTH = 2000; // 单条消息最大长度
+const MAX_CONTEXT_TOKENS = 50000; // 上下文 token 阈值
+const TOKEN_RATIO = 2; // 字符/token 估算比例（中文约 2 字符/token）
+
+// 按 accountName:senderId 存储会话历史
+const conversationHistory = new Map<string, ConversationMessage[]>();
+
+function getConversationKey(accountName: string, senderId: string): string {
+  return `${accountName}:${senderId}`;
+}
+
+/**
+ * 估算 token 数量（粗略估算）
+ */
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / TOKEN_RATIO);
+}
+
+/**
+ * 估算历史记录总 token 数
+ */
+function estimateHistoryTokens(history: ConversationMessage[]): number {
+  return history.reduce((sum, m) => sum + estimateTokens(m.content), 0);
+}
+
+/**
+ * 摘要长消息：保留开头和结尾，中间省略
+ */
+function summarizeMessage(content: string, maxLength: number = MAX_MESSAGE_LENGTH): string {
+  if (content.length <= maxLength) {
+    return content;
+  }
+
+  const halfLength = Math.floor(maxLength / 2);
+  const head = content.slice(0, halfLength);
+  const tail = content.slice(-halfLength);
+  const omittedLength = content.length - maxLength;
+
+  return `${head}\n\n... [已省略 ${omittedLength} 字符] ...\n\n${tail}`;
+}
+
+/**
+ * 使用 Claude 压缩历史记录
+ */
+async function compressHistory(history: ConversationMessage[]): Promise<string> {
+  const historyText = history
+    .map(m => {
+      const roleLabel = m.role === "user" ? "用户" : "助手";
+      return `[${roleLabel}] ${m.content}`;
+    })
+    .join("\n\n");
+
+  const compressPrompt = `请将以下对话历史压缩为简洁的摘要，保留关键信息和上下文要点。用中文回复，控制在 500 字以内。
+
+对话历史：
+${historyText}
+
+摘要：`;
+
+  const result = Bun.spawnSync({
+    cmd: ["claude", "-p", compressPrompt, "--dangerously-skip-permissions"],
+    stdout: "pipe",
+    stderr: "pipe",
+    timeout: 30000, // 30 秒超时
+  });
+
+  if (result.exitCode === 0) {
+    return result.stdout.toString().trim();
+  }
+
+  // 压缩失败，返回简单的截断摘要
+  return `[历史摘要] 共 ${history.length} 条消息，前几条：\n${history.slice(0, 3).map(m => m.content.slice(0, 100)).join("\n")}`;
+}
+
+/**
+ * 检查并压缩历史记录
+ */
+async function checkAndCompressHistory(
+  accountName: string,
+  senderId: string,
+  log: (msg: string) => void
+): Promise<void> {
+  const key = getConversationKey(accountName, senderId);
+  const history = conversationHistory.get(key);
+  if (!history || history.length < 5) return; // 少于 5 条不压缩
+
+  const tokens = estimateHistoryTokens(history);
+  if (tokens > MAX_CONTEXT_TOKENS) {
+    log(`📦 上下文超限 (${tokens} tokens)，正在压缩...`);
+
+    // 保留最近 3 条消息，压缩其余的
+    const recentMessages = history.slice(-3);
+    const oldMessages = history.slice(0, -3);
+
+    if (oldMessages.length > 0) {
+      const summary = await compressHistory(oldMessages);
+
+      // 用摘要替换旧消息
+      const compressedHistory: ConversationMessage[] = [
+        {
+          role: "assistant",
+          content: `[历史摘要]\n${summary}`,
+          timestamp: oldMessages[0].timestamp,
+          isSummary: true,
+        },
+        ...recentMessages,
+      ];
+
+      conversationHistory.set(key, compressedHistory);
+      const newTokens = estimateHistoryTokens(compressedHistory);
+      log(`✅ 压缩完成: ${tokens} → ${newTokens} tokens`);
+    }
+  }
+}
+
+function addToConversation(
+  accountName: string,
+  senderId: string,
+  role: "user" | "assistant",
+  content: string
+): void {
+  const key = getConversationKey(accountName, senderId);
+  if (!conversationHistory.has(key)) {
+    conversationHistory.set(key, []);
+  }
+
+  const history = conversationHistory.get(key)!;
+
+  // 摘要长消息
+  const summarizedContent = summarizeMessage(content);
+
+  history.push({
+    role,
+    content: summarizedContent,
+    timestamp: Date.now(),
+  });
+
+  // 限制历史长度
+  if (history.length > MAX_HISTORY_LENGTH) {
+    history.splice(0, history.length - MAX_HISTORY_LENGTH);
+  }
+}
+
+function getConversationHistory(accountName: string, senderId: string): ConversationMessage[] {
+  const key = getConversationKey(accountName, senderId);
+  return conversationHistory.get(key) || [];
+}
+
+function formatHistoryForPrompt(history: ConversationMessage[]): string {
+  if (history.length === 0) return "";
+
+  return history
+    .map(m => {
+      const roleLabel = m.role === "user" ? "用户" : "助手";
+      const prefix = m.isSummary ? "📋 " : "";
+      return `${prefix}[${roleLabel}] ${m.content}`;
+    })
+    .join("\n\n");
+}
+
 // ── MCP Server 模式 ──────────────────────────────────────────────────────────
 
 interface PendingMessage {
@@ -382,8 +552,35 @@ async function autoProcessMessages(
       const startTime = Date.now();
       log(`🤖 开始处理: [${msg.senderName}] ${msg.text.slice(0, 50)}...`);
 
-      // 构建处理提示
-      const prompt = `你收到了一条微信消息，请处理并给出回复内容。
+      // 保存用户消息到历史
+      addToConversation(accountName, msg.senderId, "user", msg.text);
+
+      // 检查并压缩历史（如果超限）
+      await checkAndCompressHistory(accountName, msg.senderId, log);
+
+      // 获取对话历史
+      const history = getConversationHistory(accountName, msg.senderId);
+      const historyText = formatHistoryForPrompt(history.slice(0, -1)); // 不包含刚添加的消息
+
+      // 构建处理提示（包含历史）
+      const prompt = historyText
+        ? `以下是之前的对话历史：
+
+${historyText}
+
+---
+
+用户发来新消息：
+发送者: ${msg.senderName}
+消息内容: ${msg.text}
+
+请根据上下文回复，要求：
+1. 如果需要查询信息或执行命令，请先使用 Claude 内置工具处理
+2. 最后只输出回复内容，不要输出其他内容
+3. 回复要简洁，像聊天一样自然
+4. 不要使用 markdown 格式
+5. 直接输出回复文本，不要加引号或代码块`
+        : `你收到了一条微信消息，请处理并给出回复内容。
 
 发送者: ${msg.senderName}
 消息内容: ${msg.text}
@@ -408,6 +605,11 @@ async function autoProcessMessages(
       if (result.exitCode === 0) {
         const output = result.stdout.toString().trim();
         log(`✅ Claude 响应 (${elapsed}s): ${output.slice(0, 100)}...`);
+
+        // 保存助手回复到历史
+        if (output) {
+          addToConversation(accountName, msg.senderId, "assistant", output);
+        }
 
         // 发送回复
         if (output) {
